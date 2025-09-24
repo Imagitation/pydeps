@@ -203,7 +203,7 @@
         async function buildDependencyTree(packageName, parentElement, visited) {
             if (visited.has(packageName)) {
                 const li = document.createElement('li');
-                li.innerHTML = `<span class="package-info">${packageName} <span class="extras">(circular dependency)</span></span>`;
+                li.innerHTML = `<span class="package-info"><a href="https://pypi.org/project/${packageName}" target="_blank" rel="noopener noreferrer">${packageName}</a> <span class="extras">(circular dependency)</span></span>`;
                 parentElement.appendChild(li);
                 return;
             }
@@ -216,14 +216,14 @@
             try {
                 const data = await getPackageData(packageName);
                 if (data.error) {
-                     li.innerHTML = `<span class="package-info error">${packageName} - ${data.error}</span>`;
+                     li.innerHTML = `<span class="package-info error"><a href="https://pypi.org/project/${packageName}" target="_blank" rel="noopener noreferrer">${packageName}</a> - ${data.error}</span>`;
                      return;
                 }
 
                 const info = data.info;
                 const wheelUrl = findWheelUrl(data.urls);
 
-                let html = `<span class="package-info">${info.name} <span class="version">${info.version}</span>`;
+                let html = `<span class="package-info"><a href="${info.project_url}" target="_blank" rel="noopener noreferrer">${info.name}</a> <span class="version">${info.version}</span>`;
                 if (wheelUrl) {
                     html += ` - <a href="${wheelUrl}" target="_blank" rel="noopener noreferrer">wheel</a>`;
                 } else {
@@ -250,7 +250,7 @@
                     await Promise.all(dependencyPromises);
                 }
             } catch (error) {
-                li.innerHTML = `<span class="package-info error">${packageName} - ${error.message}</span>`;
+                li.innerHTML = `<span class="package-info error"><a href="https://pypi.org/project/${packageName}" target="_blank" rel="noopener noreferrer">${packageName}</a> - ${error.message}</span>`;
             }
         }
     </script>
