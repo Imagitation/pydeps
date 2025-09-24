@@ -30,6 +30,14 @@
             border-radius: 6px;
             font-size: 1rem;
         }
+        .select-filter {
+            padding: 0.75rem;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 1rem;
+            background-color: white;
+            flex-shrink: 0;
+        }
         #submit-btn {
             padding: 0.75rem 1.5rem;
             border: none;
@@ -104,6 +112,20 @@
 
     <div id="input-container">
         <input type="text" id="package-input" placeholder="Enter package(s), comma-separated (e.g., requests, flask)">
+        <select id="python-version-select" class="select-filter" title="Select Python version">
+            <option value="3.12">Python 3.12</option>
+            <option value="3.11">Python 3.11</option>
+            <option value="3.10">Python 3.10</option>
+            <option value="3.9">Python 3.9</option>
+            <option value="3.8">Python 3.8</option>
+        </select>
+        <select id="arch-select" class="select-filter" title="Select target architecture">
+            <option value="any">any</option>
+            <option value="win_amd64">win_amd64</option>
+            <option value="manylinux2014_x86_64">manylinux_x86_64</option>
+            <option value="manylinux_2_17_aarch64">manylinux_aarch64</option>
+            <option value="macosx_11_0_arm64">macosx_arm64</option>
+        </select>
         <button id="submit-btn">Get Dependencies</button>
     </div>
 
@@ -115,6 +137,8 @@
     <script>
         const packageInput = document.getElementById('package-input');
         const submitBtn = document.getElementById('submit-btn');
+        const archSelect = document.getElementById('arch-select');
+        const pythonVersionSelect = document.getElementById('python-version-select');
         const treeContainer = document.getElementById('tree-container');
         const loadingIndicator = document.getElementById('loading');
 
@@ -144,6 +168,8 @@
                 return;
             }
 
+            const selectedArch = archSelect.value;
+            const selectedPythonVersion = pythonVersionSelect.value;
             // Reset UI
             treeContainer.innerHTML = '';
             loadingIndicator.style.display = 'block';
@@ -154,7 +180,7 @@
             treeContainer.appendChild(tree);
 
             try {
-                const fetchPromises = packageNames.map(name => buildDependencyTree(name, tree, new Set()));
+                const fetchPromises = packageNames.map(name => buildDependencyTree(name, tree, new Set(), selectedArch, selectedPythonVersion));
                 await Promise.all(fetchPromises);
             } finally {
                 loadingIndicator.style.display = 'none';
@@ -190,17 +216,67 @@
             return match ? match[0].toLowerCase() : null;
         }
 
-        function findWheelUrl(urls) {
-            if (!urls || urls.length === 0) return null;
-            // Prefer a universal wheel
-            const universalWheel = urls.find(file => file.packagetype === 'bdist_wheel' && file.filename.endsWith('py3-none-any.whl'));
-            if (universalWheel) return universalWheel.url;
-            // Fallback to the first available wheel
-            const anyWheel = urls.find(file => file.packagetype === 'bdist_wheel');
-            return anyWheel ? anyWheel.url : null;
+        function evaluateMarker(marker, pythonVersion) {
+            if (!marker || !pythonVersion) return true; // No marker, always valid
+
+            const pyVersionMarker = marker.match(/python_version\s*([<>=!~]+)\s*['"]?([0-9.]+)['"]?/);
+            if (!pyVersionMarker) return true; // Unrecognized marker, assume valid for simplicity
+
+            const operator = pyVersionMarker[1];
+            const version = pyVersionMarker[2];
+
+            // Simple version comparison (doesn't handle complex cases like 3.10 vs 3.1)
+            const compare = (v1, v2) => {
+                const parts1 = v1.split('.').map(Number);
+                const parts2 = v2.split('.').map(Number);
+                const len = Math.max(parts1.length, parts2.length);
+                for (let i = 0; i < len; i++) {
+                    const p1 = parts1[i] || 0;
+                    const p2 = parts2[i] || 0;
+                    if (p1 > p2) return 1;
+                    if (p1 < p2) return -1;
+                }
+                return 0;
+            };
+
+            const comparisonResult = compare(pythonVersion, version);
+
+            switch (operator) {
+                case '<':  return comparisonResult < 0;
+                case '<=': return comparisonResult <= 0;
+                case '>':  return comparisonResult > 0;
+                case '>=': return comparisonResult >= 0;
+                case '==': return comparisonResult === 0;
+                case '!=': return comparisonResult !== 0;
+                default:   return true; // Unsupported operator
+            }
         }
 
-        async function buildDependencyTree(packageName, parentElement, visited) {
+        function findWheelUrl(urls, arch, pythonVersion) {
+            if (!urls || urls.length === 0) return null;
+            const wheels = urls.filter(file => file.packagetype === 'bdist_wheel');
+            if (wheels.length === 0) return null;
+
+            // Try to find a wheel matching python version and architecture
+            const pyTag = `cp${pythonVersion.replace('.', '')}`;
+            if (arch && arch !== 'any') {
+                const specificWheel = wheels.find(file => file.filename.includes(pyTag) && file.filename.includes(arch));
+                if (specificWheel) return specificWheel.url;
+            }
+
+            // Prefer a wheel matching the selected architecture
+            if (arch && arch !== 'any') {
+                const specificWheel = wheels.find(file => file.filename.includes(arch));
+                if (specificWheel) return specificWheel.url;
+            }
+            // Then prefer a universal wheel
+            const universalWheel = wheels.find(file => file.filename.endsWith('py3-none-any.whl'));
+            if (universalWheel) return universalWheel.url;
+            // Fallback to the first available wheel
+            return wheels[0].url;
+        }
+
+        async function buildDependencyTree(packageName, parentElement, visited, selectedArch, selectedPythonVersion) {
             if (visited.has(packageName)) {
                 const li = document.createElement('li');
                 li.innerHTML = `<span class="package-info"><a href="https://pypi.org/project/${packageName}" target="_blank" rel="noopener noreferrer">${packageName}</a> <span class="extras">(circular dependency)</span></span>`;
@@ -221,7 +297,7 @@
                 }
 
                 const info = data.info;
-                const wheelUrl = findWheelUrl(data.urls);
+                const wheelUrl = findWheelUrl(data.urls, selectedArch, selectedPythonVersion);
 
                 let html = `<span class="package-info"><a href="${info.project_url}" target="_blank" rel="noopener noreferrer">${info.name}</a> <span class="version">${info.version}</span>`;
                 if (wheelUrl) {
@@ -239,11 +315,16 @@
 
                     // Use Promise.all to fetch dependencies in parallel
                     const dependencyPromises = dependencies
-                        .filter(req => !req.includes("extra ==")) // Filter out optional 'extra' dependencies
+                        .filter(req => {
+                            const parts = req.split(';');
+                            const isExtra = parts.length > 1 && parts[1].includes("extra ==");
+                            const markerValid = evaluateMarker(parts[1], selectedPythonVersion);
+                            return !isExtra && markerValid;
+                        })
                         .map(req => {
                             const depName = parseRequirement(req);
                             if (depName) {
-                                return buildDependencyTree(depName, subList, new Set(visited));
+                                return buildDependencyTree(depName, subList, new Set(visited), selectedArch, selectedPythonVersion);
                             }
                             return Promise.resolve();
                         });
